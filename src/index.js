@@ -140,54 +140,110 @@ function buildReply(id, threadId, answer) {
 // --------------------------------------------------------------------------- //
 // OpenRouter
 // --------------------------------------------------------------------------- //
-const ROUTER_PROMPT =
-  "You route voice notes for a smartwatch assistant. Decide if answering the " +
-  "note needs up-to-date information from the web (weather, news, prices, " +
-  "sports scores, schedules, current events — anything real-time or recent). " +
-  "If it does, reply with ONLY a short web search query and nothing else. " +
-  "If it does not (general knowledge, math, reminders, personal notes, " +
-  "chit-chat), reply with exactly: NONE";
+// Tool registry: each integration is one entry. Add a new tool by appending an
+// object here (name, description, args hint, enabled(), run()) — the router
+// prompt and dispatch pick it up automatically. run() returns context text
+// (or "") that gets injected into the final answer.
+const TOOL_REGISTRY = [
+  {
+    name: "web",
+    description:
+      "Search the live internet. Use for weather, news, prices, sports " +
+      "scores, schedules, current events — anything real-time or recent.",
+    args: '{ "query": "<concise search query>" }',
+    enabled: (env) =>
+      Boolean(env.FIRECRAWL_API_KEY) &&
+      Number(env.WEB_SEARCH_MAX_RESULTS ?? 5) > 0,
+    run: async (env, args, body) => {
+      let query = String(args?.query || "").trim();
+      // Guard the free model's occasional junk query: if it shares no real
+      // word with the note, just search the note itself.
+      if (!query || !sharesWord(query, body)) query = body.trim();
+      const limit = Number(env.WEB_SEARCH_MAX_RESULTS ?? 5);
+      return firecrawlSearch(env, query.slice(0, 200), limit);
+    },
+  },
+  // Future integrations, e.g.:
+  // {
+  //   name: "calendar",
+  //   description: "Look up the user's calendar events.",
+  //   args: '{ "range": "today | tomorrow | this week" }',
+  //   enabled: (env) => Boolean(env.GOOGLE_TOKEN),
+  //   run: (env, args) => listCalendarEvents(env, args.range),
+  // },
+];
+
+function enabledTools(env) {
+  return TOOL_REGISTRY.filter((t) => t.enabled(env));
+}
 
 async function callOpenRouter(env, body) {
   const model = env.OPENROUTER_MODEL || DEFAULT_MODEL;
-  const maxResults = Number(env.WEB_SEARCH_MAX_RESULTS ?? 5);
+  const tools = enabledTools(env);
 
-  // A quick routing call decides whether the note needs live web info and, if
-  // so, crafts a tight search query — so we only spend Firecrawl credits and
-  // latency when it helps. We call Firecrawl directly (its free tier), not
-  // OpenRouter's web plugin (which 500s). Best-effort: any failure skips web.
-  let webContext = "";
-  if (maxResults > 0 && env.FIRECRAWL_API_KEY) {
+  // Route → dispatch one tool → synthesize. Two LLM calls (route + answer)
+  // regardless of how many tools exist. Best-effort: any failure just answers
+  // from the model alone, so the watch never gets "(no response)".
+  let context = "";
+  if (tools.length > 0) {
     try {
-      const query = await decideSearchQuery(env, model, body);
-      if (query) {
-        console.log("web search:", query);
-        webContext = await firecrawlSearch(env, query, maxResults);
+      const plan = await routeIntent(env, model, body, tools);
+      const tool = tools.find((t) => t.name === plan.tool);
+      if (tool) {
+        console.log("tool:", tool.name, JSON.stringify(plan.args || {}));
+        context = await tool.run(env, plan.args || {}, body);
       } else {
-        console.log("no web search needed");
+        console.log("no tool needed");
       }
     } catch (err) {
-      console.error("web step failed; answering without web:", err.message);
+      console.error("tool step failed; answering without tools:", err.message);
     }
   }
-  return await chatOnce(env, model, body, webContext);
+  return await chatOnce(env, model, body, context);
 }
 
-// Ask the model whether the note needs current web info. Returns a concise
-// search query, or "" to skip searching.
-async function decideSearchQuery(env, model, body) {
+// Router: asks the model which tool (if any) the note needs and with what args.
+// Returns { tool, args }; "none"/unknown means answer directly.
+async function routeIntent(env, model, body, tools) {
+  const list = tools
+    .map((t) => `- "${t.name}": ${t.description} args: ${t.args}`)
+    .join("\n");
+  const prompt =
+    "You route voice notes for a smartwatch assistant to the right tool.\n" +
+    "Available tools:\n" +
+    list +
+    "\n" +
+    '- "none": no tool needed (general knowledge, math, reminders, personal ' +
+    "notes, chit-chat). args: {}\n" +
+    'Reply with ONLY a JSON object like {"tool":"web","args":{"query":"..."}} ' +
+    "and nothing else.";
   const content = await openrouterChat(env, model, [
-    { role: "system", content: ROUTER_PROMPT },
+    { role: "system", content: prompt },
     { role: "user", content: body },
   ]);
-  const firstLine =
-    content.split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
-  const query = firstLine.replace(/^["']|["']$/g, "").trim();
-  if (!query || /^none$/i.test(query)) return "";
-  // Guard against a degenerate crafted query (the free model sometimes emits
-  // stray text): if it shares no real word with the note, search the note.
-  if (!sharesWord(query, body)) return body.trim().slice(0, 200);
-  return query.slice(0, 200);
+  return parsePlan(content);
+}
+
+// Tolerantly extract { tool, args } from the model output (it may wrap the JSON
+// in stray reasoning text). Defaults to no tool on any parse failure.
+function parsePlan(content) {
+  const tryParse = (s) => {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  };
+  let obj = tryParse(content.trim());
+  if (!obj) {
+    const m = content.match(/\{[\s\S]*\}/);
+    if (m) obj = tryParse(m[0]);
+  }
+  if (!obj || typeof obj.tool !== "string") return { tool: "none", args: {} };
+  return {
+    tool: obj.tool,
+    args: obj.args && typeof obj.args === "object" ? obj.args : {},
+  };
 }
 
 // True if the two strings share at least one word of 4+ characters.
@@ -199,14 +255,14 @@ function sharesWord(a, b) {
   return false;
 }
 
-async function chatOnce(env, model, body, webContext) {
+async function chatOnce(env, model, body, context) {
   const messages = [{ role: "system", content: SYSTEM_PROMPT }];
-  if (webContext) {
+  if (context) {
     messages.push({
       role: "system",
       content:
         `${env.WEB_SEARCH_PROMPT || DEFAULT_WEB_SEARCH_PROMPT}\n\n` +
-        `Web search results:\n${webContext}`,
+        `Retrieved context:\n${context}`,
     });
   }
   messages.push({ role: "user", content: body });
