@@ -2,3 +2,5 @@
 OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxxxxxxxxxx
 GITHUB_TOKEN=github_pat_xxxxxxxxxxxxxxxxxxxx
 GITHUB_WEBHOOK_SECRET=choose-a-long-random-string
+# Firecrawl key for direct web search (free tier). Omit to disable web search.
+FIRECRAWL_API_KEY=fc-xxxxxxxxxxxxxxxxxxxx

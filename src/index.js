@@ -15,6 +15,7 @@
 
 const GITHUB_API = "https://api.github.com";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v1/search";
 const DEFAULT_MODEL = "openrouter/free";
 
 const SYSTEM_PROMPT =
@@ -143,39 +144,33 @@ async function callOpenRouter(env, body) {
   const model = env.OPENROUTER_MODEL || DEFAULT_MODEL;
   const maxResults = Number(env.WEB_SEARCH_MAX_RESULTS ?? 5);
 
-  // Web search is best-effort: try with the plugin, but if it errors (e.g.
-  // Firecrawl not linked, OpenRouter 500) or returns nothing, fall back to a
-  // plain answer so the watch never gets "(no response)".
-  if (maxResults > 0) {
+  // Best-effort real-time web search via Firecrawl directly (its free tier).
+  // We call Firecrawl ourselves — not OpenRouter's web plugin, which 500s —
+  // then inject the results into a plain openrouter/free completion. If the
+  // search fails, we still answer from the model so the watch never gets
+  // "(no response)".
+  let webContext = "";
+  if (maxResults > 0 && env.FIRECRAWL_API_KEY) {
     try {
-      const withWeb = await chatOnce(env, model, body, maxResults);
-      if (withWeb) return withWeb;
-      console.error("web search returned empty; retrying without web");
+      webContext = await firecrawlSearch(env, body, maxResults);
     } catch (err) {
-      console.error("web search failed; retrying without web:", err.message);
+      console.error("firecrawl search failed; answering without web:", err.message);
     }
   }
-  return await chatOnce(env, model, body, 0);
+  return await chatOnce(env, model, body, webContext);
 }
 
-async function chatOnce(env, model, body, maxResults) {
-  const payload = {
-    model,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: body },
-    ],
-  };
-  if (maxResults > 0) {
-    payload.plugins = [
-      {
-        id: "web",
-        engine: "firecrawl",
-        max_results: maxResults,
-        search_prompt: env.WEB_SEARCH_PROMPT || DEFAULT_WEB_SEARCH_PROMPT,
-      },
-    ];
+async function chatOnce(env, model, body, webContext) {
+  const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+  if (webContext) {
+    messages.push({
+      role: "system",
+      content:
+        `${env.WEB_SEARCH_PROMPT || DEFAULT_WEB_SEARCH_PROMPT}\n\n` +
+        `Web search results:\n${webContext}`,
+    });
   }
+  messages.push({ role: "user", content: body });
 
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
@@ -186,7 +181,7 @@ async function chatOnce(env, model, body, maxResults) {
       "HTTP-Referer": "https://github.com/",
       "X-Title": "pebble-bridge-worker",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ model, messages }),
   });
   if (!res.ok) {
     const detail = await res.text();
@@ -205,6 +200,38 @@ async function chatOnce(env, model, body, maxResults) {
     content = content.map((p) => (typeof p === "string" ? p : p?.text || "")).join("");
   }
   return (content || "").trim();
+}
+
+// Query Firecrawl's search API and return a compact, prompt-ready context
+// string. `description` holds scraped page text, so we strip markdown/links
+// and truncate hard to keep the prompt small.
+async function firecrawlSearch(env, query, limit) {
+  const res = await fetch(FIRECRAWL_SEARCH_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, limit }),
+  });
+  if (!res.ok) {
+    throw new Error(`Firecrawl ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const results = Array.isArray(data?.data) ? data.data : [];
+  return results
+    .slice(0, limit)
+    .map((r, i) => {
+      const title = (r.title || "").trim();
+      const url = r.url || "";
+      const snippet = (r.description || "")
+        .replace(/!?\[[^\]]*\]\([^)]*\)/g, " ") // drop markdown links/images
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 500);
+      return `[${i + 1}] ${title} — ${url}\n${snippet}`;
+    })
+    .join("\n\n");
 }
 
 // --------------------------------------------------------------------------- //

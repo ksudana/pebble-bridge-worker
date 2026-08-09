@@ -39,6 +39,7 @@ Edit `wrangler.toml` if your repo differs from the defaults
 npx wrangler secret put OPENROUTER_API_KEY
 npx wrangler secret put GITHUB_TOKEN
 npx wrangler secret put GITHUB_WEBHOOK_SECRET   # invent a long random string; keep it
+npx wrangler secret put FIRECRAWL_API_KEY       # for real-time web search (optional)
 ```
 
 ### 2. Deploy
@@ -88,12 +89,13 @@ npx wrangler tail
   ignored.
 - **Signature verified:** requests without a valid `X-Hub-Signature-256`
   (HMAC-SHA256 of the body with `GITHUB_WEBHOOK_SECRET`) get `401`.
-- **Web search (free):** real-time questions work via OpenRouter's `web`
-  plugin routed to **Firecrawl** (BYOK free tier), so inference stays on
-  `openrouter/free` at $0. One-time setup: log into OpenRouter → **Plugin
-  Settings → Web Search Engine → select Firecrawl** and accept its terms; this
-  provisions a linked Firecrawl account with free search credits. Each answer
-  spends a few Firecrawl credits (not OpenRouter dollars). Tune or disable via
-  `WEB_SEARCH_MAX_RESULTS` in `wrangler.toml` (`0` = off).
+- **Web search (free):** the Worker calls **Firecrawl's `/v1/search` API
+  directly** (its free tier), trims the results, and injects them into a plain
+  `openrouter/free` completion — so inference stays at $0 and search uses
+  Firecrawl's free credits. This deliberately avoids OpenRouter's `web` plugin,
+  which returns HTTP 500 for this setup. Requires the `FIRECRAWL_API_KEY`
+  secret. Tune result count or disable via `WEB_SEARCH_MAX_RESULTS` in
+  `wrangler.toml` (`0` = off). If a search fails, the Worker still answers from
+  the model alone, so the watch never gets "(no response)".
 - **Idempotent:** a note is answered only if `replies/<id>.md` doesn't already
   exist, so redeliveries are safe.
