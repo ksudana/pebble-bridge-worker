@@ -103,7 +103,7 @@ async function processInbox(env) {
   for (const f of pending) {
     const id = f.name.replace(/\.md$/, "");
     try {
-      const text = await getFileText(env, `inbox/${f.name}`);
+      const { text, sha } = await getFile(env, `inbox/${f.name}`);
       const { meta, body } = parseFrontmatter(text);
       const threadId = meta.thread_id || id;
 
@@ -111,6 +111,16 @@ async function processInbox(env) {
       const reply = buildReply(id, threadId, answer);
 
       await putFile(env, `replies/${f.name}`, reply, `worker: answer ${id}`);
+
+      // Mark the original inbox note processed so the phone stops showing it as
+      // pending. This commit touches inbox/, re-triggering the webhook once,
+      // but the note now has a reply so it's skipped — no loop.
+      const updated = setFrontmatterStatus(text, "complete");
+      if (updated !== text) {
+        await putFile(
+          env, `inbox/${f.name}`, updated, `worker: mark ${id} complete`, sha,
+        );
+      }
       console.log("answered", id);
     } catch (err) {
       console.error("failed on", id, err && err.stack ? err.stack : err);
@@ -355,24 +365,28 @@ async function listDir(env, dir) {
   return Array.isArray(items) ? items.filter((i) => i.type === "file") : [];
 }
 
-async function getFileText(env, path) {
+// Returns { text, sha }. The sha is needed to update (not just create) a file.
+async function getFile(env, path) {
   const url = `${GITHUB_API}/repos/${env.REPO_OWNER}/${env.REPO_NAME}/contents/${path}?ref=${env.BRANCH}`;
   const res = await fetch(url, { headers: ghHeaders(env) });
   if (!res.ok) throw new Error(`getFile ${path} ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  return fromBase64(data.content);
+  return { text: fromBase64(data.content), sha: data.sha };
 }
 
-async function putFile(env, path, content, message) {
+// Create or update a file. Pass `sha` when updating an existing file.
+async function putFile(env, path, content, message, sha) {
   const url = `${GITHUB_API}/repos/${env.REPO_OWNER}/${env.REPO_NAME}/contents/${path}`;
+  const payload = {
+    message,
+    content: toBase64(content),
+    branch: env.BRANCH,
+  };
+  if (sha) payload.sha = sha;
   const res = await fetch(url, {
     method: "PUT",
     headers: { ...ghHeaders(env), "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message,
-      content: toBase64(content),
-      branch: env.BRANCH,
-    }),
+    body: JSON.stringify(payload),
   });
   // 201 created. 422 usually means it already exists (a concurrent delivery
   // beat us to it) — safe to ignore.
@@ -384,6 +398,13 @@ async function putFile(env, path, content, message) {
 // --------------------------------------------------------------------------- //
 // Parsing / text utils
 // --------------------------------------------------------------------------- //
+// Replace the first `status:` line (which lives in the frontmatter) with the
+// given status, preserving the phone's quoted style. Returns text unchanged if
+// there's no status line.
+function setFrontmatterStatus(text, status) {
+  return text.replace(/^status:.*$/m, `status: "${status}"`);
+}
+
 function parseFrontmatter(text) {
   const meta = {};
   let body = text;
