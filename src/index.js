@@ -1,5 +1,5 @@
 /**
- * pebble-bridge-watcher — Cloudflare Worker
+ * pebble-bridge-worker — Cloudflare Worker
  *
  * Triggered by a GitHub "push" webhook on the PebbleBridge mailbox repo.
  * For every request in inbox/ that has no matching reply, it asks OpenRouter
@@ -24,11 +24,21 @@ const SYSTEM_PROMPT =
   "provided, use them for anything time-sensitive (weather, news, prices) " +
   "instead of answering from memory.";
 
+// Wraps the web-search results before the model sees them. Overrides
+// OpenRouter's default (which asks for markdown link citations) with
+// watch-friendly, plain-text instructions.
+const DEFAULT_WEB_SEARCH_PROMPT =
+  "The following are live web search results for the user's question. Use them " +
+  "to answer with current, accurate information. Keep the answer to 1-3 short " +
+  "plain-text sentences suitable for a tiny smartwatch screen. Do not use " +
+  "markdown, bullet points, or link syntax. If you cite a source, name only its " +
+  "domain in plain text (e.g. weather.gov).";
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method !== "POST") {
       return new Response(
-        "pebble-bridge-watcher is alive. POST GitHub webhooks here.\n",
+        "pebble-bridge-worker is alive. POST GitHub webhooks here.\n",
         { status: 200 },
       );
     }
@@ -145,7 +155,12 @@ async function callOpenRouter(env, body) {
   };
   if (maxResults > 0) {
     payload.plugins = [
-      { id: "web", engine: "firecrawl", max_results: maxResults },
+      {
+        id: "web",
+        engine: "firecrawl",
+        max_results: maxResults,
+        search_prompt: env.WEB_SEARCH_PROMPT || DEFAULT_WEB_SEARCH_PROMPT,
+      },
     ];
   }
 
@@ -156,7 +171,7 @@ async function callOpenRouter(env, body) {
       "Content-Type": "application/json",
       // Optional attribution headers OpenRouter recommends:
       "HTTP-Referer": "https://github.com/",
-      "X-Title": "pebble-bridge-watcher",
+      "X-Title": "pebble-bridge-worker",
     },
     body: JSON.stringify(payload),
   });
@@ -176,7 +191,7 @@ function ghHeaders(env) {
     Authorization: `Bearer ${env.GITHUB_TOKEN}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "pebble-bridge-watcher",
+    "User-Agent": "pebble-bridge-worker",
   };
 }
 

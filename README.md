@@ -1,4 +1,4 @@
-# pebble-bridge-watcher
+# pebble-bridge-worker
 
 A **Cloudflare Worker** that replaces the local laptop watcher for
 [Codex Pigeon](https://apps.repebble.com). A GitHub **push webhook** on the
@@ -48,7 +48,7 @@ npx wrangler deploy
 ```
 
 Wrangler prints the Worker URL, e.g.
-`https://pebble-bridge-watcher.<subdomain>.workers.dev`.
+`https://pebble-bridge-worker.<subdomain>.workers.dev`.
 
 ### 3. Add the GitHub webhook
 
