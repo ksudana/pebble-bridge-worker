@@ -8,7 +8,11 @@ compatibility_date = "2026-08-08"
 REPO_OWNER = "ksudana"
 REPO_NAME = "PebbleBridge"
 BRANCH = "main"
-OPENROUTER_MODEL = "openrouter/free"
+# Pinned to one reliable free model. The "openrouter/free" pooled router sends
+# requests to random models (incl. a content-safety classifier that replied
+# "User Safety: safe"), causing inconsistent output. This model handled both
+# JSON routing and concise answering reliably in testing.
+OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 # Real-time web search via Firecrawl's API directly (free tier). Number of
 # results fetched per note; set to "0" to disable. Needs FIRECRAWL_API_KEY.
 WEB_SEARCH_MAX_RESULTS = "5"

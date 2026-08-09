@@ -16,7 +16,10 @@
 const GITHUB_API = "https://api.github.com";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v1/search";
-const DEFAULT_MODEL = "openrouter/free";
+// Fallback if OPENROUTER_MODEL isn't set. Pinned to one reliable free model
+// rather than the "openrouter/free" pool, which routes to random (sometimes
+// unusable) models. See wrangler.toml.
+const DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 
 const SYSTEM_PROMPT =
   "You are answering voice notes dictated on a Pebble smartwatch. " +
