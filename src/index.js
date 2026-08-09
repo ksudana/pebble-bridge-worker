@@ -20,7 +20,9 @@ const DEFAULT_MODEL = "openrouter/free";
 const SYSTEM_PROMPT =
   "You are answering voice notes dictated on a Pebble smartwatch. " +
   "Reply concisely and plainly in a few short sentences — the answer is read " +
-  "on a tiny screen. Do not use markdown formatting.";
+  "on a tiny screen. Do not use markdown formatting. When live web results are " +
+  "provided, use them for anything time-sensitive (weather, news, prices) " +
+  "instead of answering from memory.";
 
 export default {
   async fetch(request, env, ctx) {
@@ -129,6 +131,24 @@ function buildReply(id, threadId, answer) {
 // --------------------------------------------------------------------------- //
 async function callOpenRouter(env, body) {
   const model = env.OPENROUTER_MODEL || DEFAULT_MODEL;
+
+  // Real-time web search at zero cost: OpenRouter passes through to Firecrawl's
+  // BYOK tier (link Firecrawl in OpenRouter's plugin settings first). Set
+  // WEB_SEARCH_MAX_RESULTS = "0" to disable and stop spending Firecrawl credits.
+  const maxResults = Number(env.WEB_SEARCH_MAX_RESULTS ?? 5);
+  const payload = {
+    model,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: body },
+    ],
+  };
+  if (maxResults > 0) {
+    payload.plugins = [
+      { id: "web", engine: "firecrawl", max_results: maxResults },
+    ];
+  }
+
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
     headers: {
@@ -138,13 +158,7 @@ async function callOpenRouter(env, body) {
       "HTTP-Referer": "https://github.com/",
       "X-Title": "pebble-bridge-watcher",
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: body },
-      ],
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const detail = await res.text();

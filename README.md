@@ -88,8 +88,12 @@ npx wrangler tail
   ignored.
 - **Signature verified:** requests without a valid `X-Hub-Signature-256`
   (HMAC-SHA256 of the body with `GITHUB_WEBHOOK_SECRET`) get `401`.
-- **No web access:** unlike the local Claude worker, `openrouter/free` answers
-  from the model alone — real-time questions (weather/news) won't be live.
-  Change `OPENROUTER_MODEL` in `wrangler.toml` to use a different model.
+- **Web search (free):** real-time questions work via OpenRouter's `web`
+  plugin routed to **Firecrawl** (BYOK free tier), so inference stays on
+  `openrouter/free` at $0. One-time setup: log into OpenRouter → **Plugin
+  Settings → Web Search Engine → select Firecrawl** and accept its terms; this
+  provisions a linked Firecrawl account with free search credits. Each answer
+  spends a few Firecrawl credits (not OpenRouter dollars). Tune or disable via
+  `WEB_SEARCH_MAX_RESULTS` in `wrangler.toml` (`0` = off).
 - **Idempotent:** a note is answered only if `replies/<id>.md` doesn't already
   exist, so redeliveries are safe.

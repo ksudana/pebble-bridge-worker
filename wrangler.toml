@@ -9,3 +9,6 @@ REPO_OWNER = "ksudana"
 REPO_NAME = "PebbleBridge"
 BRANCH = "main"
 OPENROUTER_MODEL = "openrouter/free"
+# Web search via OpenRouter's "web" plugin routed to Firecrawl (BYOK, free tier).
+# Set to "0" to disable web search and stop spending Firecrawl credits.
+WEB_SEARCH_MAX_RESULTS = "5"
