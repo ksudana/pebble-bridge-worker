@@ -141,11 +141,24 @@ function buildReply(id, threadId, answer) {
 // --------------------------------------------------------------------------- //
 async function callOpenRouter(env, body) {
   const model = env.OPENROUTER_MODEL || DEFAULT_MODEL;
-
-  // Real-time web search at zero cost: OpenRouter passes through to Firecrawl's
-  // BYOK tier (link Firecrawl in OpenRouter's plugin settings first). Set
-  // WEB_SEARCH_MAX_RESULTS = "0" to disable and stop spending Firecrawl credits.
   const maxResults = Number(env.WEB_SEARCH_MAX_RESULTS ?? 5);
+
+  // Web search is best-effort: try with the plugin, but if it errors (e.g.
+  // Firecrawl not linked, OpenRouter 500) or returns nothing, fall back to a
+  // plain answer so the watch never gets "(no response)".
+  if (maxResults > 0) {
+    try {
+      const withWeb = await chatOnce(env, model, body, maxResults);
+      if (withWeb) return withWeb;
+      console.error("web search returned empty; retrying without web");
+    } catch (err) {
+      console.error("web search failed; retrying without web:", err.message);
+    }
+  }
+  return await chatOnce(env, model, body, 0);
+}
+
+async function chatOnce(env, model, body, maxResults) {
   const payload = {
     model,
     messages: [
@@ -191,17 +204,7 @@ async function callOpenRouter(env, body) {
   if (Array.isArray(content)) {
     content = content.map((p) => (typeof p === "string" ? p : p?.text || "")).join("");
   }
-  content = (content || "").trim();
-
-  if (!content) {
-    // Surface exactly what came back so `wrangler tail` shows the cause.
-    console.error(
-      "OpenRouter empty content. model=", model,
-      "finish_reason=", data?.choices?.[0]?.finish_reason,
-      "body=", JSON.stringify(data).slice(0, 800),
-    );
-  }
-  return content;
+  return (content || "").trim();
 }
 
 // --------------------------------------------------------------------------- //
