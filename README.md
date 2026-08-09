@@ -101,3 +101,26 @@ npx wrangler tail
   the model alone, so the watch never gets "(no response)".
 - **Idempotent:** a note is answered only if `replies/<id>.md` doesn't already
   exist, so redeliveries are safe.
+
+## Adding an integration
+
+Each note flows through **route → dispatch one tool → synthesize** (two LLM
+calls total, regardless of how many tools exist). Integrations live in the
+`TOOL_REGISTRY` array in `src/index.js`. To add one, append an object:
+
+```js
+{
+  name: "calendar",                                  // router picks by name
+  description: "Look up the user's calendar events.", // shown to the router
+  args: '{ "range": "today | tomorrow | this week" }',
+  enabled: (env) => Boolean(env.GOOGLE_TOKEN),        // hide if not configured
+  run: (env, args) => listCalendarEvents(env, args.range), // returns context text
+}
+```
+
+The router prompt and dispatch pick it up automatically; the model chooses
+`{"tool":"calendar","args":{...}}` when appropriate. Add the tool's secret with
+`wrangler secret put`, validate `args` inside `run` (the free model's structured
+output is imperfect), and return trimmed text. For **multi-step or chained**
+tools (one tool's output feeds another), graduate to a tool-calling loop with a
+function-calling-capable model instead.
