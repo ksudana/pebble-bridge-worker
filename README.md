@@ -89,10 +89,12 @@ npx wrangler tail
   ignored.
 - **Signature verified:** requests without a valid `X-Hub-Signature-256`
   (HMAC-SHA256 of the body with `GITHUB_WEBHOOK_SECRET`) get `401`.
-- **Web search (free):** the Worker calls **Firecrawl's `/v1/search` API
-  directly** (its free tier), trims the results, and injects them into a plain
-  `openrouter/free` completion — so inference stays at $0 and search uses
-  Firecrawl's free credits. This deliberately avoids OpenRouter's `web` plugin,
+- **Web search (free, on-demand):** a quick routing call first decides whether
+  the note needs live info (and crafts a search query); only then does the
+  Worker call **Firecrawl's `/v1/search` API directly** (its free tier), trim
+  the results, and inject them into a plain `openrouter/free` completion — so
+  inference stays at $0, search uses Firecrawl's free credits, and reminders /
+  math / chit-chat skip the web entirely. This deliberately avoids OpenRouter's `web` plugin,
   which returns HTTP 500 for this setup. Requires the `FIRECRAWL_API_KEY`
   secret. Tune result count or disable via `WEB_SEARCH_MAX_RESULTS` in
   `wrangler.toml` (`0` = off). If a search fails, the Worker still answers from

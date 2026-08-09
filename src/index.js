@@ -140,24 +140,63 @@ function buildReply(id, threadId, answer) {
 // --------------------------------------------------------------------------- //
 // OpenRouter
 // --------------------------------------------------------------------------- //
+const ROUTER_PROMPT =
+  "You route voice notes for a smartwatch assistant. Decide if answering the " +
+  "note needs up-to-date information from the web (weather, news, prices, " +
+  "sports scores, schedules, current events — anything real-time or recent). " +
+  "If it does, reply with ONLY a short web search query and nothing else. " +
+  "If it does not (general knowledge, math, reminders, personal notes, " +
+  "chit-chat), reply with exactly: NONE";
+
 async function callOpenRouter(env, body) {
   const model = env.OPENROUTER_MODEL || DEFAULT_MODEL;
   const maxResults = Number(env.WEB_SEARCH_MAX_RESULTS ?? 5);
 
-  // Best-effort real-time web search via Firecrawl directly (its free tier).
-  // We call Firecrawl ourselves — not OpenRouter's web plugin, which 500s —
-  // then inject the results into a plain openrouter/free completion. If the
-  // search fails, we still answer from the model so the watch never gets
-  // "(no response)".
+  // A quick routing call decides whether the note needs live web info and, if
+  // so, crafts a tight search query — so we only spend Firecrawl credits and
+  // latency when it helps. We call Firecrawl directly (its free tier), not
+  // OpenRouter's web plugin (which 500s). Best-effort: any failure skips web.
   let webContext = "";
   if (maxResults > 0 && env.FIRECRAWL_API_KEY) {
     try {
-      webContext = await firecrawlSearch(env, body, maxResults);
+      const query = await decideSearchQuery(env, model, body);
+      if (query) {
+        console.log("web search:", query);
+        webContext = await firecrawlSearch(env, query, maxResults);
+      } else {
+        console.log("no web search needed");
+      }
     } catch (err) {
-      console.error("firecrawl search failed; answering without web:", err.message);
+      console.error("web step failed; answering without web:", err.message);
     }
   }
   return await chatOnce(env, model, body, webContext);
+}
+
+// Ask the model whether the note needs current web info. Returns a concise
+// search query, or "" to skip searching.
+async function decideSearchQuery(env, model, body) {
+  const content = await openrouterChat(env, model, [
+    { role: "system", content: ROUTER_PROMPT },
+    { role: "user", content: body },
+  ]);
+  const firstLine =
+    content.split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+  const query = firstLine.replace(/^["']|["']$/g, "").trim();
+  if (!query || /^none$/i.test(query)) return "";
+  // Guard against a degenerate crafted query (the free model sometimes emits
+  // stray text): if it shares no real word with the note, search the note.
+  if (!sharesWord(query, body)) return body.trim().slice(0, 200);
+  return query.slice(0, 200);
+}
+
+// True if the two strings share at least one word of 4+ characters.
+function sharesWord(a, b) {
+  const words = (s) => new Set(s.toLowerCase().match(/[a-z0-9]{4,}/g) || []);
+  const A = words(a);
+  if (A.size === 0) return false;
+  for (const w of words(b)) if (A.has(w)) return true;
+  return false;
 }
 
 async function chatOnce(env, model, body, webContext) {
@@ -171,7 +210,12 @@ async function chatOnce(env, model, body, webContext) {
     });
   }
   messages.push({ role: "user", content: body });
+  return await openrouterChat(env, model, messages);
+}
 
+// Low-level OpenRouter chat completion. Returns trimmed content; throws on
+// HTTP or API-level errors.
+async function openrouterChat(env, model, messages) {
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
     headers: {
