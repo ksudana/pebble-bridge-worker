@@ -1,0 +1,11 @@
+name = "pebble-bridge-watcher"
+main = "src/index.js"
+compatibility_date = "2026-08-08"
+
+# Non-secret config. Secrets (OPENROUTER_API_KEY, GITHUB_TOKEN,
+# GITHUB_WEBHOOK_SECRET) are set with `wrangler secret put`, never here.
+[vars]
+REPO_OWNER = "ksudana"
+REPO_NAME = "PebbleBridge"
+BRANCH = "main"
+OPENROUTER_MODEL = "openrouter/free"
