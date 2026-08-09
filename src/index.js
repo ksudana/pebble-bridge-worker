@@ -180,7 +180,28 @@ async function callOpenRouter(env, body) {
     throw new Error(`OpenRouter ${res.status}: ${detail.slice(0, 300)}`);
   }
   const data = await res.json();
-  return data?.choices?.[0]?.message?.content?.trim() || "";
+
+  // OpenRouter sometimes returns 200 with an error object (bad model, etc.).
+  if (data?.error) {
+    throw new Error(`OpenRouter error: ${JSON.stringify(data.error).slice(0, 300)}`);
+  }
+
+  // content is usually a string, but some providers return an array of parts.
+  let content = data?.choices?.[0]?.message?.content;
+  if (Array.isArray(content)) {
+    content = content.map((p) => (typeof p === "string" ? p : p?.text || "")).join("");
+  }
+  content = (content || "").trim();
+
+  if (!content) {
+    // Surface exactly what came back so `wrangler tail` shows the cause.
+    console.error(
+      "OpenRouter empty content. model=", model,
+      "finish_reason=", data?.choices?.[0]?.finish_reason,
+      "body=", JSON.stringify(data).slice(0, 800),
+    );
+  }
+  return content;
 }
 
 // --------------------------------------------------------------------------- //
